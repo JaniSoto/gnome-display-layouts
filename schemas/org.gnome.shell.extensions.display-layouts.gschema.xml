@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.display-layouts" path="/org/gnome/shell/extensions/display-layouts/">
+    <key name="show-indicator" type="b">
+      <default>true</default>
+      <summary>Show the top panel indicator icon</summary>
+    </key>
+
+    <!-- Generic Slot 1 -->
+    <key name="shortcut-1" type="as">
+      <default>[]</default>
+    </key>
+    <key name="target-1" type="s">
+      <default>""</default>
+    </key>
+    <key name="action-1" type="s">
+      <default>"apply"</default> <!-- "apply", "toggle", or "save" -->
+    </key>
+
+    <!-- Generic Slot 2 -->
+    <key name="shortcut-2" type="as">
+      <default>[]</default>
+    </key>
+    <key name="target-2" type="s">
+      <default>""</default>
+    </key>
+    <key name="action-2" type="s">
+      <default>"apply"</default>
+    </key>
+
+    <!-- Generic Slot 3 -->
+    <key name="shortcut-3" type="as">
+      <default>[]</default>
+    </key>
+    <key name="target-3" type="s">
+      <default>""</default>
+    </key>
+    <key name="action-3" type="s">
+      <default>"toggle"</default>
+    </key>
+
+    <!-- Generic Slot 4 -->
+    <key name="shortcut-4" type="as">
+      <default>[]</default>
+    </key>
+    <key name="target-4" type="s">
+      <default>""</default>
+    </key>
+    <key name="action-4" type="s">
+      <default>"toggle"</default>
+    </key>
+
+    <!-- Generic Slot 5 -->
+    <key name="shortcut-5" type="as">
+      <default>[]</default>
+    </key>
+    <key name="target-5" type="s">
+      <default>""</default>
+    </key>
+    <key name="action-5" type="s">
+      <default>"toggle"</default>
+    </key>
+
+    <!-- Generic Slot 6 -->
+    <key name="shortcut-6" type="as">
+      <default>[]</default>
+    </key>
+    <key name="target-6" type="s">
+      <default>""</default>
+    </key>
+    <key name="action-6" type="s">
+      <default>"toggle"</default>
+    </key>
+
+    <!-- Generic Slot 7 -->
+    <key name="shortcut-7" type="as">
+      <default>[]</default>
+    </key>
+    <key name="target-7" type="s">
+      <default>""</default>
+    </key>
+    <key name="action-7" type="s">
+      <default>"toggle"</default>
+    </key>
+
+    <!-- Generic Slot 8 -->
+    <key name="shortcut-8" type="as">
+      <default>[]</default>
+    </key>
+    <key name="target-8" type="s">
+      <default>""</default>
+    </key>
+    <key name="action-8" type="s">
+      <default>"save"</default>
+    </key>
+  </schema>
+</schemalist>

@@ -1,0 +1,14 @@
+{
+  "uuid": "display-layouts@gnome-monitor-layouts.local",
+  "name": "Display Layouts Manager",
+  "description": "Natively manage display profiles via top bar and system D-Bus.",
+  "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
+    "50"
+  ],
+  "url": "https://github.com/yourusername/gnome-monitor-layouts"
+}
