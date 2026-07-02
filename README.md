@@ -31,7 +31,7 @@ An elegant, self-contained GNOME Shell Extension to manage, save, and toggle mul
 
 ### 2. Saving a Layout
 1. Open the system GNOME **Display Settings** and arrange your monitor layout, scaling, and orientation as desired.
-2. Click the display monitor icon in your top panel $\to$ click **Save Current Layout...**
+2. Click the display monitor icon in your top panel to click **Save Current Layout...**
 3. Enter a profile name (e.g. `home` or `office`) and assign friendly text aliases to each connected screen (e.g. `left`, `right`, `tv`).
 
 ### 3. Applying and Toggling Layouts
@@ -42,12 +42,12 @@ An elegant, self-contained GNOME Shell Extension to manage, save, and toggle mul
 
 ## Keyboard Shortcuts Setup
 
-Open the settings interface (**GNOME Settings** $\to$ **Apps** $\to$ **Extensions** $\to$ **Display Layouts Manager** $\to$ Click the **Gear** icon). You can configure up to **8 Generic Slots**:
+Om the extension settings you can configure up to **8 Generic Slots**:
 
 1.  **Action Type:** Choose `Apply Profile`, `Toggle Display`, or `Save State (Prompt Dialog)`.
 2.  **Target Name:** Type the profile name (e.g. `home`) or the monitor alias (e.g. `tv`). This input is ignored if `Save State` is selected.
-3.  **Keyboard Shortcut String:** Type your modifier-wrapped key combinations:
-    *   `<Super>1` (Super/Windows + 1)
+3.  **Keyboard Shortcut String:** Type your modifier-wrapped key combinations, for example:
+    *   `<Super>1`
     *   `<Super><Shift>t`
     *   `<Ctrl><Alt>h`
 
