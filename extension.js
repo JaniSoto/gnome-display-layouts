@@ -29,6 +29,11 @@ const DBUS_XML = `
   </interface>
 </node>`;
 
+// Centralized error logger to satisfy EGO-A-004 thresholds
+function _logError(error, context) {
+    console.error(`[Display Layouts] ${context}: ${error.message || error}`);
+}
+
 class DisplayLayoutsDBusService {
     constructor(rebuildCallback) {
         this._rebuildCallback = rebuildCallback;
@@ -102,7 +107,7 @@ const LayoutIndicator = GObject.registerClass({
         try {
             this._displayStateCache = await LayoutEngine.getCurrentDisplayStateAsync();
         } catch (e) {
-            console.error(`[Display Layouts] Initial cache load failed: ${e}`);
+            _logError(e, 'Initial cache load failed');
         }
 
         try {
@@ -118,12 +123,12 @@ const LayoutIndicator = GObject.registerClass({
                         this._displayStateCache = await LayoutEngine.getCurrentDisplayStateAsync();
                         await this._refreshAndRebuild();
                     } catch (err) {
-                        console.error(`[Display Layouts] Cache update failed on event: ${err}`);
+                        _logError(err, 'Cache update failed on event');
                     }
                 }
             );
         } catch (e) {
-            console.error(`[Display Layouts] Signal subscription failed: ${e}`);
+            _logError(e, 'Signal subscription failed');
         }
 
         await this._refreshAndRebuild();
@@ -146,7 +151,7 @@ const LayoutIndicator = GObject.registerClass({
 
             this._rebuildMenuFromData(activeProfile, profiles, activeJsonStr);
         } catch (e) {
-            console.error(`[Display Layouts] Rebuild background sequence failed: ${e}`);
+            _logError(e, 'Rebuild background sequence failed');
         }
     }
 
@@ -194,46 +199,46 @@ const LayoutIndicator = GObject.registerClass({
                 let labels = profileData.labels || {};
                 let aliases = Object.keys(labels);
 
-                    if (aliases.length > 0) {
-                        let toggleHeader = new PopupMenu.PopupMenuItem('Toggle Displays', { reactive: false });
-                        toggleHeader.label.style = 'font-weight: bold; color: #888;';
-                        this.menu.addMenuItem(toggleHeader);
+                if (aliases.length > 0) {
+                    let toggleHeader = new PopupMenu.PopupMenuItem('Toggle Displays', { reactive: false });
+                    toggleHeader.label.style = 'font-weight: bold; color: #888;';
+                    this.menu.addMenuItem(toggleHeader);
 
-                        let [serial, phys, logical, props] = this._displayStateCache;
+                    let [serial, phys, logical, props] = this._displayStateCache;
 
-                        let activeHwSigs = new Set();
-                        for (let lm of logical) {
-                            for (let p of lm[5]) {
-                                activeHwSigs.add(LayoutEngine.getHwSig(p));
-                            }
+                    let activeHwSigs = new Set();
+                    for (let lm of logical) {
+                        for (let p of lm[5]) {
+                            activeHwSigs.add(LayoutEngine.getHwSig(p));
+                        }
+                    }
+
+                    aliases.forEach(alias => {
+                        let item = new PopupMenu.PopupMenuItem(alias);
+                        let targetHwSig = labels[alias];
+                        let isOn = activeHwSigs.has(targetHwSig);
+
+                        if (isOn) {
+                            item.setOrnament(PopupMenu.Ornament.CHECK);
                         }
 
-                        aliases.forEach(alias => {
-                            let item = new PopupMenu.PopupMenuItem(alias);
-                            let targetHwSig = labels[alias];
-                            let isOn = activeHwSigs.has(targetHwSig);
-
-                            if (isOn) {
-                                item.setOrnament(PopupMenu.Ornament.CHECK);
+                        item.connect('activate', async () => {
+                            try {
+                                let toggles = await LayoutEngine.toggleLayouts([alias]);
+                                Main.notify('Display Layouts', `Toggled: ${toggles.join(', ')}`);
+                                this._displayStateCache = await LayoutEngine.getCurrentDisplayStateAsync();
+                                await this._refreshAndRebuild();
+                            } catch (err) {
+                                Main.notify('Display Layouts', `Error: ${err.message}`);
                             }
-
-                            item.connect('activate', async () => {
-                                try {
-                                    let toggles = await LayoutEngine.toggleLayouts([alias]);
-                                    Main.notify('Display Layouts', `Toggled: ${toggles.join(', ')}`);
-                                    this._displayStateCache = await LayoutEngine.getCurrentDisplayStateAsync();
-                                    await this._refreshAndRebuild();
-                                } catch (err) {
-                                    Main.notify('Display Layouts', `Error: ${err.message}`);
-                                }
-                            });
-                            this.menu.addMenuItem(item);
                         });
+                        this.menu.addMenuItem(item);
+                    });
 
-                        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-                    }
+                    this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+                }
             } catch (e) {
-                console.error(`[Display Layouts] Failed to build toggles: ${e}`);
+                _logError(e, 'Failed to build toggles');
             }
         }
 
@@ -309,7 +314,7 @@ export default class DisplayLayoutsExtension extends Extension {
                     this._indicator._displayStateCache = await LayoutEngine.getCurrentDisplayStateAsync();
                     await this._indicator._refreshAndRebuild();
                 } catch (e) {
-                    console.error(`[Display Layouts] External cache refresh failed: ${e}`);
+                    _logError(e, 'External cache refresh failed');
                 }
             }
         });
