@@ -42,7 +42,7 @@ An elegant, self-contained GNOME Shell Extension to manage, save, and toggle mul
 
 ## Keyboard Shortcuts Setup
 
-Om the extension settings you can configure up to **8 Generic Slots**:
+On the extension settings you can configure up to **8 Generic Slots**:
 
 1.  **Action Type:** Choose `Apply Profile`, `Toggle Display`, or `Save State (Prompt Dialog)`.
 2.  **Target Name:** Type the profile name (e.g. `home`) or the monitor alias (e.g. `tv`). This input is ignored if `Save State` is selected.
