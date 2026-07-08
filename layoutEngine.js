@@ -9,7 +9,7 @@ const DBUS_PATH = '/org/gnome/Mutter/DisplayConfig';
 const DBUS_IFACE = 'org.gnome.Mutter.DisplayConfig';
 
 // Direct asynchronous D-Bus bridge
-export async function callMutterAsync(methodName, variantArgs) {
+async function callMutterAsync(methodName, variantArgs) {
     return await Gio.DBus.session.call(
         DBUS_NAME, DBUS_PATH, DBUS_IFACE, methodName, variantArgs,
         null, Gio.DBusCallFlags.NONE, -1, null
@@ -21,16 +21,24 @@ export async function getCurrentDisplayStateAsync() {
     return reply.recursiveUnpack();
 }
 
-export function writeTextFileAsync(filePath, content) {
+async function writeTextFileAsync(filePath, content) {
+    let file = Gio.File.new_for_path(filePath);
+    let parent = file.get_parent();
+
+    // Standard non-blocking asynchronous directory creation on the user configuration folder
+    if (parent) {
+        await new Promise(resolve => {
+            parent.make_directory_async(GLib.PRIORITY_DEFAULT, null, (p, res) => {
+                try { p.make_directory_finish(res); } catch (e) {} // Safely ignore folders already in existence
+                resolve();
+            });
+        });
+    }
+
+    const bytes = new TextEncoder().encode(content);
     return new Promise((resolve, reject) => {
-        let file = Gio.File.new_for_path(filePath);
-        let parent = file.get_parent();
-        if (parent && !parent.query_exists(null)) {
-            parent.make_directory_with_parents(null);
-        }
-        const bytes = new TextEncoder().encode(content);
         file.replace_contents_async(bytes, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null, (f, res) => {
-            try { f.replace_contents_finish(res); resolve(true); } 
+            try { f.replace_contents_finish(res); resolve(true); }
             catch (e) { reject(e); }
         });
     });
@@ -50,8 +58,7 @@ export function readTextFileAsync(filePath) {
 export function getProfilesAsync() {
     return new Promise((resolve) => {
         let dir = Gio.File.new_for_path(CONFIG_DIR);
-        if (!dir.query_exists(null)) return resolve([]);
-
+        // Exclude blocking synchronous checks; query files asynchronously and catch missing folders downstream
         dir.enumerate_children_async('standard::name', Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_DEFAULT, null, (d, res) => {
             try {
                 let enumerator = d.enumerate_children_finish(res);
@@ -73,7 +80,10 @@ export function getProfilesAsync() {
                     });
                 };
                 fetchNext();
-            } catch (err) { resolve([]); }
+            } catch (err) {
+                // Safely catch standard G_IO_ERROR_NOT_FOUND (folder missing) and return an empty collection
+                resolve([]);
+            }
         });
     });
 }
@@ -83,15 +93,47 @@ export function getHwSig(physInfo) {
     return `${vendor}_${prod}_${serial}`.replace(/\s+/g, '');
 }
 
-export function getActiveMode(modes) {
+// Map connector names to unique physical signatures: "DP-1" -> "Goldstar_Model_0_1"
+export function buildConnToHwMap(phys) {
+    let counts = {};
+    return Object.fromEntries(phys.map(p => {
+        let base = getHwSig(p[0]);
+        counts[base] = (counts[base] || 0) + 1;
+        let uniqueSig = `${base}_${counts[base]}`;
+        return [p[0][0], uniqueSig];
+    }));
+}
+
+// Map unique physical signatures back to connector names: "Goldstar_Model_0_1" -> "DP-1"
+export function buildHwToConnMap(phys) {
+    let counts = {};
+    return Object.fromEntries(phys.map(p => {
+        let base = getHwSig(p[0]);
+        counts[base] = (counts[base] || 0) + 1;
+        let uniqueSig = `${base}_${counts[base]}`;
+        return [uniqueSig, p[0][0]];
+    }));
+}
+
+function getActiveMode(modes) {
     let current = modes.find(m => m[6] && m[6]['is-current']);
     if (current) return current[0];
     let preferred = modes.find(m => m[6] && m[6]['is-preferred']);
     return preferred ? preferred[0] : (modes.length ? modes[0][0] : "");
 }
 
+// Resolves the hw_sig of the "primary" logical monitor on both the live desktop and the saved profile
+function resolvePrimaryHwSigs(logical, profile, connToHw) {
+    let livePrimary = logical.find(lm => lm[4] && lm[5].length > 0);
+    let profilePrimary = profile.logical_monitors.find(slm => slm.primary && slm.monitors.length > 0);
+    return {
+        livePrimaryHwSig: livePrimary ? connToHw[livePrimary[5][0][0]] : null,
+        profilePrimaryHwSig: profilePrimary ? profilePrimary.monitors[0].hw_sig : null,
+    };
+}
+
 // Core DBus Apply Logic: heals, offsets, and formats the GVariant payload
-export async function applyLayoutToDBus(serial, logicalMonitors, livePrimaryHwSig, profilePrimaryHwSig) {
+async function applyLayoutToDBus(serial, logicalMonitors, livePrimaryHwSig, profilePrimaryHwSig) {
     if (!logicalMonitors || logicalMonitors.length === 0) throw new Error("No logical monitors to apply.");
 
     let lmList = logicalMonitors.map(lm => [lm[0], lm[1], lm[2], lm[3], false, lm[5], lm[6]]);
@@ -100,15 +142,18 @@ export async function applyLayoutToDBus(serial, logicalMonitors, livePrimaryHwSi
     if (profilePrimaryHwSig) primaryIndex = lmList.findIndex(lm => lm[6] && lm[6].includes(profilePrimaryHwSig));
     if (primaryIndex === -1 && livePrimaryHwSig) primaryIndex = lmList.findIndex(lm => lm[6] && lm[6].includes(livePrimaryHwSig));
     if (primaryIndex === -1) primaryIndex = 0;
-    
+
     lmList[primaryIndex][4] = true;
 
     let minX = Math.min(...lmList.map(lm => lm[0]));
     let minY = Math.min(...lmList.map(lm => lm[1]));
-    if (minX > 0 || minY > 0) lmList.forEach(lm => { lm[0] -= minX; lm[1] -= minY; });
+    lmList.forEach(lm => {
+        lm[0] -= minX;
+        lm[1] -= minY;
+    });
 
     let finalLm = lmList.map(lm => [
-        Number(lm[0]), Number(lm[1]), Number(lm[2]), Number(lm[3]), Boolean(lm[4]),
+        Number(lm[0]), Number(lm[1]), Number(lm[2]), Number(lm[3]), lm[4],
         lm[5].map(m => [m[0], m[1], m[2] || {}])
     ]);
 
@@ -117,8 +162,9 @@ export async function applyLayoutToDBus(serial, logicalMonitors, livePrimaryHwSi
 }
 
 export async function saveLayout(name, aliasResolver) {
-    let [serial, phys, logical, props] = await getCurrentDisplayStateAsync();
-    let activeModes = Object.fromEntries(phys.map(p => [getHwSig(p[0]), getActiveMode(p[1])]));
+    let [, phys, logical] = await getCurrentDisplayStateAsync();
+    let connToHw = buildConnToHwMap(phys);
+    let activeModes = Object.fromEntries(phys.map(p => [connToHw[p[0][0]], getActiveMode(p[1])]));
     let labels = {};
     let savedLogical = [];
 
@@ -127,7 +173,7 @@ export async function saveLayout(name, aliasResolver) {
         let savedPhys = [];
 
         for (let p of physList) {
-            let hwSig = getHwSig(p);
+            let hwSig = connToHw[p[0]];
             savedPhys.push({ hw_sig: hwSig, mode_id: activeModes[hwSig] || "", props: {} });
             labels[await aliasResolver(p[0], p[1], p[2], x, y, String(idx + 1))] = hwSig;
         }
@@ -143,16 +189,17 @@ export async function applyLayout(name) {
     let content = await readTextFileAsync(`${CONFIG_DIR}/${name}.json`);
     if (!content) throw new Error(`Profile '${name}' does not exist.`);
 
-    let profile = JSON.parse(content);
-    let [serial, phys, logical, props] = await getCurrentDisplayStateAsync();
+    let profile;
+    try {
+        profile = JSON.parse(content);
+    } catch (err) {
+        throw new Error(`Profile '${name}' has a corrupted configuration file.`);
+    }
 
-    let livePrimary = logical.find(lm => lm[4] && lm[5].length > 0);
-    let livePrimaryHwSig = livePrimary ? getHwSig(livePrimary[5][0]) : null;
-
-    let profilePrimary = profile.logical_monitors.find(slm => slm.primary && slm.monitors.length > 0);
-    let profilePrimaryHwSig = profilePrimary ? profilePrimary.monitors[0].hw_sig : null;
-
-    let hwToConn = Object.fromEntries(phys.map(p => [getHwSig(p[0]), p[0][0]]));
+    let [serial, phys, logical] = await getCurrentDisplayStateAsync();
+    let connToHw = buildConnToHwMap(phys);
+    let { livePrimaryHwSig, profilePrimaryHwSig } = resolvePrimaryHwSigs(logical, profile, connToHw);
+    let hwToConn = buildHwToConnMap(phys);
     let newLogical = [];
 
     for (let slm of profile.logical_monitors) {
@@ -177,17 +224,19 @@ export async function toggleLayouts(aliases) {
     let content = await readTextFileAsync(`${CONFIG_DIR}/${activeName}.json`);
     if (!content) throw new Error(`Profile '${activeName}' missing.`);
 
-    let profile = JSON.parse(content);
-    let [serial, phys, logical, props] = await getCurrentDisplayStateAsync();
-    let hwToConn = Object.fromEntries(phys.map(p => [getHwSig(p[0]), p[0][0]]));
+    let profile;
+    try {
+        profile = JSON.parse(content);
+    } catch (err) {
+        throw new Error(`Profile '${activeName}' has a corrupted configuration file.`);
+    }
 
-    let livePrimary = logical.find(lm => lm[4] && lm[5].length > 0);
-    let livePrimaryHwSig = livePrimary ? getHwSig(livePrimary[5][0]) : null;
+    let [serial, phys, logical] = await getCurrentDisplayStateAsync();
+    let hwToConn = buildHwToConnMap(phys);
+    let connToHw = buildConnToHwMap(phys);
+    let { livePrimaryHwSig, profilePrimaryHwSig } = resolvePrimaryHwSigs(logical, profile, connToHw);
 
-    let profilePrimary = profile.logical_monitors.find(slm => slm.primary && slm.monitors.length > 0);
-    let profilePrimaryHwSig = profilePrimary ? profilePrimary.monitors[0].hw_sig : null;
-
-    let desiredHws = new Set(logical.flatMap(lm => lm[5].map(getHwSig)));
+    let desiredHws = new Set(logical.flatMap(lm => lm[5].map(p => connToHw[p[0]])));
     let toggleStates = [];
 
     for (let alias of aliases) {

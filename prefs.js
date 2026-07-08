@@ -1,12 +1,11 @@
 import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk';
 import Adw from 'gi://Adw';
-import GObject from 'gi://GObject';
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 export default class DisplayLayoutsPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
-        let settings = this.getSettings('org.gnome.shell.extensions.display-layouts');
+        let settings = this.getSettings();
 
         let page = new Adw.PreferencesPage();
         window.add(page);
@@ -23,6 +22,20 @@ export default class DisplayLayoutsPreferences extends ExtensionPreferences {
         });
         generalGroup.add(indicatorRow);
         settings.bind('show-indicator', indicatorRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
+        let notificationRow = new Adw.SwitchRow({
+            title: 'Show Notifications',
+            subtitle: 'Show system notifications for profile and layout events',
+        });
+        generalGroup.add(notificationRow);
+        settings.bind('show-notifications', notificationRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+
+        let autoApplyRow = new Adw.SwitchRow({
+            title: 'Auto-Apply Profiles',
+            subtitle: 'Instantly apply saved profiles matching connected displays',
+        });
+        generalGroup.add(autoApplyRow);
+        settings.bind('enable-auto-apply', autoApplyRow, 'active', Gio.SettingsBindFlags.DEFAULT);
 
         // Custom shortcuts group
         let shortcutsGroup = new Adw.PreferencesGroup({
@@ -42,29 +55,18 @@ export default class DisplayLayoutsPreferences extends ExtensionPreferences {
             });
             prefGroup.add(rowGroup);
 
+            let currentAction = settings.get_string(actionKey);
+
             // 1. Action Type Dropdown Selection
             let combo = new Adw.ComboRow({
                 title: 'Action Type',
                 model: Gtk.StringList.new(['Apply Profile', 'Toggle Display', 'Save State (Prompt Dialog)']),
             });
-            
+
             // Map GSettings action to drop-down selection index
-            let currentAction = settings.get_string(actionKey);
             if (currentAction === 'toggle') combo.selected = 1;
             else if (currentAction === 'save') combo.selected = 2;
             else combo.selected = 0;
-
-            combo.connect('notify::selected', () => {
-                let selected = combo.selected;
-                let actionStr = 'apply';
-                if (selected === 1) actionStr = 'toggle';
-                else if (selected === 2) actionStr = 'save';
-                settings.set_string(actionKey, actionStr);
-                
-                // Dynamically adjust visibility of the Target Name row
-                targetRow.visible = (actionStr !== 'save');
-            });
-            rowGroup.add_row(combo);
 
             // 2. Target string input (ignored when action is "save")
             let targetRow = new Adw.EntryRow({
@@ -73,6 +75,18 @@ export default class DisplayLayoutsPreferences extends ExtensionPreferences {
                 visible: (currentAction !== 'save'),
             });
             settings.bind(targetKey, targetRow, 'text', Gio.SettingsBindFlags.DEFAULT);
+
+            combo.connect('notify::selected', () => {
+                let selected = combo.selected;
+                let actionStr = 'apply';
+                if (selected === 1) actionStr = 'toggle';
+                else if (selected === 2) actionStr = 'save';
+                settings.set_string(actionKey, actionStr);
+
+                // Dynamically adjust visibility of the Target Name row
+                targetRow.visible = (actionStr !== 'save');
+            });
+            rowGroup.add_row(combo);
             rowGroup.add_row(targetRow);
 
             // 3. Key combination input

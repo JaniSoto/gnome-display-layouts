@@ -6,6 +6,16 @@
       <summary>Show the top panel indicator icon</summary>
     </key>
 
+    <key name="show-notifications" type="b">
+      <default>true</default>
+      <summary>Show system notifications for profile and layout events</summary>
+    </key>
+
+    <key name="enable-auto-apply" type="b">
+      <default>true</default>
+      <summary>Instantly apply saved profiles matching connected displays</summary>
+    </key>
+
     <!-- Generic Slot 1 -->
     <key name="shortcut-1" type="as">
       <default>[]</default>

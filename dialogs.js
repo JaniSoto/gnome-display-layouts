@@ -12,7 +12,6 @@ export const SaveLayoutDialog = GObject.registerClass({
             styleClass: 'save-layout-dialog',
             destroyOnClose: true,
         });
-        this._monitors = monitors;
         this._callback = callback;
 
         // Title
@@ -34,7 +33,12 @@ export const SaveLayoutDialog = GObject.registerClass({
             hint_text: 'e.g. home, work, docking',
             style: 'margin-bottom: 20px; width: 335px;',
         });
+        // Enter key submits the dialog from the name field, same as clicking "Save Profile"
+        this._nameEntry.clutter_text.connect('activate', () => this._saveAction());
         this.contentLayout.add_child(this._nameEntry);
+
+        // Ensure keyboard-only focus is mapped directly to the input box upon mapping
+        this.setInitialKeyFocus(this._nameEntry);
 
         // Section Header
         const aliasesHeader = new St.Label({
@@ -44,9 +48,9 @@ export const SaveLayoutDialog = GObject.registerClass({
         this.contentLayout.add_child(aliasesHeader);
 
         this._monitorEntries = [];
-        
+
         // Loop through active monitors to generate input rows
-        this._monitors.forEach(m => {
+        monitors.forEach(m => {
             let row = new St.BoxLayout({
                 vertical: false,
                 style: 'margin-bottom: 10px; align-items: center;',
@@ -65,10 +69,12 @@ export const SaveLayoutDialog = GObject.registerClass({
                 text: m.connector, // Pre-fill with the port as a logical default
                 style: 'width: 120px;',
             });
+            // Enter key submits the dialog from any alias field too
+            entry.clutter_text.connect('activate', () => this._saveAction());
             row.add_child(entry);
 
             this.contentLayout.add_child(row);
-            
+
             this._monitorEntries.push({
                 connector: m.connector,
                 entry: entry,
@@ -84,24 +90,26 @@ export const SaveLayoutDialog = GObject.registerClass({
 
         this.addButton({
             label: 'Save Profile',
-            action: () => {
-                let name = this._nameEntry.get_text().trim();
-                if (!name) {
-                    Main.notify('Display Layouts', 'Error: Profile name is required.');
-                    return;
-                }
-
-                // Map the connectors to their corresponding visual entries
-                let aliasMap = {};
-                this._monitorEntries.forEach(item => {
-                    let enteredAlias = item.entry.get_text().trim();
-                    aliasMap[item.connector] = enteredAlias || item.defaultAlias;
-                });
-
-                this._callback(name, aliasMap);
-                this.close();
-            },
+            action: () => this._saveAction(),
             key: Clutter.KEY_Return,
         });
+    }
+
+    _saveAction() {
+        let name = this._nameEntry.get_text().trim();
+        if (!name) {
+            Main.notify('Display Layouts', 'Error: Profile name is required.');
+            return;
+        }
+
+        // Map the connectors to their corresponding visual entries
+        let aliasMap = {};
+        this._monitorEntries.forEach(item => {
+            let enteredAlias = item.entry.get_text().trim();
+            aliasMap[item.connector] = enteredAlias || item.defaultAlias;
+        });
+
+        this._callback(name, aliasMap);
+        this.close();
     }
 });
