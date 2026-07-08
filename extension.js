@@ -21,7 +21,7 @@ const DBUS_XML = `
   </interface>
 </node>`;
 
-// Module-level private GSettings reference
+// shared GSettings instance, set in enable() / cleared in disable()
 let _settings = null;
 
 function _logError(error, context) {
@@ -31,6 +31,15 @@ function _logError(error, context) {
 function _notify(message, isError = false) {
     if (isError || (_settings && _settings.get_boolean('show-notifications'))) {
         Main.notify('Display Layouts', message);
+    }
+}
+
+// wraps a LayoutEngine call so failures surface as a plain Error over D-Bus
+async function _callSafe(fn) {
+    try {
+        return await fn();
+    } catch (e) {
+        throw new Error(e.message);
     }
 }
 
@@ -48,21 +57,15 @@ class DisplayLayoutsDBusService {
     }
 
     async Apply(name) {
-        try {
-            await LayoutEngine.applyLayout(name);
-        } catch (e) { throw new Error(e.message); }
+        return _callSafe(() => LayoutEngine.applyLayout(name));
     }
 
     async Toggle(aliases) {
-        try {
-            return await LayoutEngine.toggleLayouts(aliases);
-        } catch (e) { throw new Error(e.message); }
+        return _callSafe(() => LayoutEngine.toggleLayouts(aliases));
     }
 
     async Save(name) {
-        try {
-            await LayoutEngine.saveLayout(name, async (conn, v, p, x, y, def) => conn || def);
-        } catch (e) { throw new Error(e.message); }
+        return _callSafe(() => LayoutEngine.saveLayout(name, async (conn, v, p, x, y, def) => conn || def));
     }
 }
 
@@ -90,16 +93,21 @@ const LayoutIndicator = GObject.registerClass({
         await this.updateCacheAndRebuild(false);
     }
 
+    // true once this rebuild epoch is superseded or the indicator was destroyed
+    _isStale(epoch) {
+        return this._destroyed || epoch !== this._rebuildEpoch;
+    }
+
     async updateCacheAndRebuild(fromCache = false) {
         this._rebuildEpoch = (this._rebuildEpoch || 0) + 1;
-        let epoch = this._rebuildEpoch;
+        const epoch = this._rebuildEpoch;
 
         try {
-            let queryRequired = !fromCache || !this._displayStateCache;
+            const queryRequired = !fromCache || !this._displayStateCache;
 
             if (queryRequired) {
-                let state = await LayoutEngine.getCurrentDisplayStateAsync();
-                if (this._destroyed || epoch !== this._rebuildEpoch) return;
+                const state = await LayoutEngine.getCurrentDisplayStateAsync();
+                if (this._isStale(epoch)) return;
                 this._displayStateCache = state;
             }
 
@@ -108,21 +116,21 @@ const LayoutIndicator = GObject.registerClass({
     }
 
     async _refreshAndRebuild(epoch) {
-        if (this._destroyed || epoch !== this._rebuildEpoch) return;
+        if (this._isStale(epoch)) return;
         try {
-            let activeProfile = (await LayoutEngine.readTextFileAsync(LayoutEngine.ACTIVE_PROFILE_FILE))?.trim() || '';
-            if (this._destroyed || epoch !== this._rebuildEpoch) return;
-            let profiles = await LayoutEngine.getProfilesAsync();
-            if (this._destroyed || epoch !== this._rebuildEpoch) return;
-            let activeJsonStr = activeProfile ? await LayoutEngine.readTextFileAsync(`${LayoutEngine.CONFIG_DIR}/${activeProfile}.json`) : null;
+            const activeProfile = (await LayoutEngine.readTextFileAsync(LayoutEngine.ACTIVE_PROFILE_FILE))?.trim() || '';
+            if (this._isStale(epoch)) return;
+            const profiles = await LayoutEngine.getProfilesAsync();
+            if (this._isStale(epoch)) return;
+            const activeJsonStr = activeProfile ? await LayoutEngine.readTextFileAsync(`${LayoutEngine.CONFIG_DIR}/${activeProfile}.json`) : null;
 
-            if (this._destroyed || epoch !== this._rebuildEpoch) return;
+            if (this._isStale(epoch)) return;
             this._rebuildMenuFromData(activeProfile, profiles, activeJsonStr);
         } catch (e) { _logError(e, 'Rebuild background sequence failed'); }
     }
 
     _addSectionHeader(text) {
-        let item = new PopupMenu.PopupMenuItem(text, { reactive: false });
+        const item = new PopupMenu.PopupMenuItem(text, { reactive: false });
         item.label.style = 'font-weight: bold; color: #888;';
         this.menu.addMenuItem(item);
     }
@@ -131,16 +139,15 @@ const LayoutIndicator = GObject.registerClass({
         if (this._destroyed) return;
         this.menu.removeAll();
 
-        // Saved Profiles Section
         this._addSectionHeader('Saved Profiles');
 
         if (profiles.length === 0) {
-            let emptyItem = new PopupMenu.PopupMenuItem('No profiles found');
+            const emptyItem = new PopupMenu.PopupMenuItem('No profiles found');
             emptyItem.sensitive = false;
             this.menu.addMenuItem(emptyItem);
         } else {
             profiles.forEach(profile => {
-                let item = new PopupMenu.PopupMenuItem(profile);
+                const item = new PopupMenu.PopupMenuItem(profile);
                 if (profile === activeProfile) item.setOrnament(PopupMenu.Ornament.CHECK);
 
                 item.connect('activate', async () => {
@@ -156,27 +163,26 @@ const LayoutIndicator = GObject.registerClass({
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        // Dynamic Toggle Section
         if (activeProfile && this._displayStateCache && activeJsonStr) {
             try {
-                let profileData = JSON.parse(activeJsonStr);
-                let labels = profileData.labels || {};
-                let aliases = Object.keys(labels);
+                const profileData = JSON.parse(activeJsonStr);
+                const labels = profileData.labels || {};
+                const aliases = Object.keys(labels);
 
                 if (aliases.length > 0) {
                     this._addSectionHeader('Toggle Displays');
 
-                    let [, , logicalMonitors] = this._displayStateCache;
-                    let connToHw = LayoutEngine.buildConnToHwMap(this._displayStateCache[1]);
-                    let activeHwSigs = new Set(logicalMonitors.flatMap(lm => lm[5].map(p => connToHw[p[0]])));
+                    const [, phys, logicalMonitors] = this._displayStateCache;
+                    const connToHw = LayoutEngine.buildConnToHwMap(phys);
+                    const activeHwSigs = new Set(logicalMonitors.flatMap(lm => lm[5].map(p => connToHw[p[0]])));
 
                     aliases.forEach(alias => {
-                        let item = new PopupMenu.PopupMenuItem(alias);
+                        const item = new PopupMenu.PopupMenuItem(alias);
                         if (activeHwSigs.has(labels[alias])) item.setOrnament(PopupMenu.Ornament.CHECK);
 
                         item.connect('activate', async () => {
                             try {
-                                let toggles = await LayoutEngine.toggleLayouts([alias]);
+                                const toggles = await LayoutEngine.toggleLayouts([alias]);
                                 if (this._destroyed) return;
                                 _notify(`Toggled: ${toggles.join(', ')}`);
                             } catch (err) { _notify(`Error: ${err.message}`, true); }
@@ -188,7 +194,7 @@ const LayoutIndicator = GObject.registerClass({
             } catch (e) { _logError(e, 'Failed to build toggles'); }
         }
 
-        let saveItem = new PopupMenu.PopupMenuItem('Save Current Layout...');
+        const saveItem = new PopupMenu.PopupMenuItem('Save Current Layout...');
         saveItem.connect('activate', () => this.triggerSaveDialog());
         this.menu.addMenuItem(saveItem);
     }
@@ -197,13 +203,13 @@ const LayoutIndicator = GObject.registerClass({
         if (this._destroyed) return;
         if (!this._displayStateCache) return _notify('Error: No active display state cached.', true);
 
-        // Close any pre-existing dialog to prevent leaks
+        // close a stale dialog before opening a new one
         if (this._saveDialog) {
             this._saveDialog.close();
         }
 
-        let [, , logicalMonitors] = this._displayStateCache;
-        let monitorsToLabel = logicalMonitors.flatMap((lm, idx) =>
+        const [, , logicalMonitors] = this._displayStateCache;
+        const monitorsToLabel = logicalMonitors.flatMap((lm, idx) =>
             lm[5].map(p => ({ connector: p[0], manufacturer: p[1], modelName: p[2], x: lm[0], y: lm[1], defaultAlias: String(idx + 1) }))
         );
 
@@ -216,7 +222,7 @@ const LayoutIndicator = GObject.registerClass({
             } catch (err) { _notify(`Failed to save: ${err.message}`, true); }
         });
 
-        // Clear the reference cleanly upon destruction to avoid double-teardown runtime crashes
+        // avoid a dangling reference once the dialog closes
         this._saveDialog.connect('destroy', () => {
             this._saveDialog = null;
         });
@@ -252,15 +258,15 @@ export default class DisplayLayoutsExtension extends Extension {
 
         this._bindings.forEach(b => {
             Main.wm.addKeybinding(b.shortcutKey, _settings, Meta.KeyBindingFlags.NONE, Shell.ActionMode.NORMAL, async () => {
-                let action = _settings.get_string(b.actionKey);
-                let target = _settings.get_string(b.targetKey).trim();
+                const action = _settings.get_string(b.actionKey);
+                const target = _settings.get_string(b.targetKey).trim();
 
                 try {
                     if (action === 'apply' && target) {
                         await LayoutEngine.applyLayout(target);
                         _notify(`Applied layout: ${target}`);
                     } else if (action === 'toggle' && target) {
-                        let toggles = await LayoutEngine.toggleLayouts([target]);
+                        const toggles = await LayoutEngine.toggleLayouts([target]);
                         _notify(`Toggled: ${toggles.join(', ')}`);
                     } else if (action === 'save' && this._indicator) {
                         this._indicator.triggerSaveDialog();
@@ -275,10 +281,10 @@ export default class DisplayLayoutsExtension extends Extension {
             async () => {
                 if (!this._cacheInitialized) return;
 
-                // 1. Process matching engine
-                let applied = await this._handleAutoApply();
+                // try to auto-apply a matching profile first
+                const applied = await this._handleAutoApply();
 
-                // 2. Cascade visual refresh ONLY if no layout was applied
+                // otherwise just refresh the menu with the new state
                 if (!applied && this._indicator) {
                     try {
                         await this._indicator.updateCacheAndRebuild(false);
@@ -293,8 +299,8 @@ export default class DisplayLayoutsExtension extends Extension {
 
     async _initAutoApplyCache() {
         try {
-            let [, phys] = await LayoutEngine.getCurrentDisplayStateAsync();
-            this._lastConnectedHwSigs = phys.map(p => LayoutEngine.getHwSig(p[0])).sort().join(',');
+            const [, phys] = await LayoutEngine.getCurrentDisplayStateAsync();
+            this._lastConnectedHwSigs = LayoutEngine.getConnectedHwSetString(phys);
             this._cacheInitialized = true;
         } catch (e) {
             _logError(e, 'Failed to initialize hardware signature cache');
@@ -303,25 +309,25 @@ export default class DisplayLayoutsExtension extends Extension {
 
     async _handleAutoApply() {
         try {
-            let [, phys] = await LayoutEngine.getCurrentDisplayStateAsync();
-            let currentHwSet = phys.map(p => LayoutEngine.getHwSig(p[0])).sort().join(',');
+            const [, phys] = await LayoutEngine.getCurrentDisplayStateAsync();
+            const currentHwSet = LayoutEngine.getConnectedHwSetString(phys);
 
-            // Prevent infinite layout-apply event loops
+            // avoid re-triggering on the same hardware set
             if (currentHwSet === this._lastConnectedHwSigs) return false;
             this._lastConnectedHwSigs = currentHwSet;
 
-            // Respect user opt-out configuration
+            // user disabled auto-apply
             if (!_settings || !_settings.get_boolean('enable-auto-apply')) return false;
 
-            // Increment run epoch to cancel stale, concurrent async actions
+            // cancel this run if a newer one starts before it finishes
             this._latestAutoApplyId = (this._latestAutoApplyId || 0) + 1;
-            let runId = this._latestAutoApplyId;
+            const runId = this._latestAutoApplyId;
 
-            let profiles = await LayoutEngine.getProfilesAsync();
+            const profiles = await LayoutEngine.getProfilesAsync();
             if (runId !== this._latestAutoApplyId) return false;
 
-            for (let name of profiles) {
-                let content = await LayoutEngine.readTextFileAsync(`${LayoutEngine.CONFIG_DIR}/${name}.json`);
+            for (const name of profiles) {
+                const content = await LayoutEngine.readTextFileAsync(`${LayoutEngine.CONFIG_DIR}/${name}.json`);
                 if (runId !== this._latestAutoApplyId) return false;
                 if (!content) continue;
 
@@ -329,10 +335,10 @@ export default class DisplayLayoutsExtension extends Extension {
                 try {
                     profile = JSON.parse(content);
                 } catch (err) {
-                    continue; // Isolated recovery: safely skip corrupted profile files
+                    continue; // skip corrupted profile
                 }
 
-                let profileHwSet = profile.logical_monitors.flatMap(lm => lm.monitors.map(m => m.hw_sig)).sort().join(',');
+                const profileHwSet = profile.logical_monitors.flatMap(lm => lm.monitors.map(m => m.hw_sig)).sort().join(',');
 
                 if (profileHwSet === currentHwSet) {
                     await LayoutEngine.applyLayout(name);
@@ -347,7 +353,7 @@ export default class DisplayLayoutsExtension extends Extension {
     }
 
     _updateIndicatorVisibility() {
-        let show = _settings.get_boolean('show-indicator');
+        const show = _settings.get_boolean('show-indicator');
         if (show && !this._indicator) {
             this._indicator = new LayoutIndicator();
             Main.panel.addToStatusArea(this.uuid, this._indicator);
