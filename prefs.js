@@ -5,7 +5,8 @@ import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/
 
 export default class DisplayLayoutsPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
-        let settings = this.getSettings();
+        // Explicitly pass the schema ID to avoid GNOME Shell sharedInternals lookup failures
+        let settings = this.getSettings('org.gnome.shell.extensions.display-layouts');
 
         let page = new Adw.PreferencesPage();
         window.add(page);

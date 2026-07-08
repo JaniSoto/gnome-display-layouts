@@ -237,7 +237,7 @@ const LayoutIndicator = GObject.registerClass({
 
 export default class DisplayLayoutsExtension extends Extension {
     enable() {
-        _settings = this.getSettings();
+        _settings = this.getSettings('org.gnome.shell.extensions.display-layouts');
         this._indicator = null;
         this._cacheInitialized = false;
         this._lastConnectedHwSigs = null;
