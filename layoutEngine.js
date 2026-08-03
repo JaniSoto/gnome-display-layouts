@@ -1,14 +1,15 @@
+// layoutEngine.js
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
 export const CONFIG_DIR = `${GLib.get_home_dir()}/.config/display-layouts`;
 export const ACTIVE_PROFILE_FILE = `${CONFIG_DIR}/.active_profile`;
+export const HARDWARE_HISTORY_FILE = `${CONFIG_DIR}/.hardware_history.json`;
 
 const DBUS_NAME = 'org.gnome.Mutter.DisplayConfig';
 const DBUS_PATH = '/org/gnome/Mutter/DisplayConfig';
 const DBUS_IFACE = 'org.gnome.Mutter.DisplayConfig';
 
-// async D-Bus call wrapper
 async function callMutterAsync(methodName, variantArgs) {
     return await Gio.DBus.session.call(
         DBUS_NAME, DBUS_PATH, DBUS_IFACE, methodName, variantArgs,
@@ -25,11 +26,10 @@ async function writeTextFileAsync(filePath, content) {
     const file = Gio.File.new_for_path(filePath);
     const parent = file.get_parent();
 
-    // ensure the config directory exists
     if (parent) {
         await new Promise(resolve => {
             parent.make_directory_async(GLib.PRIORITY_DEFAULT, null, (p, res) => {
-                try { p.make_directory_finish(res); } catch (e) {} // already exists
+                try { p.make_directory_finish(res); } catch (e) {}
                 resolve();
             });
         });
@@ -55,10 +55,28 @@ export function readTextFileAsync(filePath) {
     });
 }
 
+export function parseProfileName(fullName) {
+    if (!fullName) return { group: '', sub: '', isGrouped: false, fullName: '' };
+    const parts = fullName.split(':');
+    if (parts.length > 1) {
+        return {
+            group: parts[0].trim(),
+            sub: parts.slice(1).join(':').trim(),
+            isGrouped: true,
+            fullName,
+        };
+    }
+    return {
+        group: fullName.trim(),
+        sub: fullName.trim(),
+        isGrouped: false,
+        fullName,
+    };
+}
+
 export function getProfilesAsync() {
     return new Promise((resolve) => {
         const dir = Gio.File.new_for_path(CONFIG_DIR);
-        // async listing; a missing directory is handled in the outer catch
         dir.enumerate_children_async('standard::name', Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_DEFAULT, null, (d, res) => {
             try {
                 const enumerator = d.enumerate_children_finish(res);
@@ -73,16 +91,19 @@ export function getProfilesAsync() {
                             }
                             files.forEach(file => {
                                 const name = file.get_name();
-                                if (name.endsWith('.json')) profiles.push(name.substring(0, name.length - 5));
+                                if (name.endsWith('.json') && !name.startsWith('.')) {
+                                    profiles.push(name.substring(0, name.length - 5));
+                                }
                             });
                             fetchNext();
-                        } catch (err) { resolve(profiles.sort()); }
+                        } catch (err) {
+                            try { enumerator.close(null); } catch (c) {}
+                            resolve(profiles.sort());
+                        }
                     });
                 };
                 fetchNext();
-            } catch (err) {
-                resolve([]); // config directory doesn't exist yet
-            }
+            } catch (err) { resolve([]); }
         });
     });
 }
@@ -92,13 +113,10 @@ export function getHwSig(physInfo) {
     return `${vendor}_${prod}_${serial}`.replace(/\s+/g, '');
 }
 
-// hardware-set fingerprint for the currently connected monitors, used to
-// detect when the physical display configuration has changed
 export function getConnectedHwSetString(phys) {
     return phys.map(p => getHwSig(p[0])).sort().join(',');
 }
 
-// connector -> unique hardware signature, e.g. "DP-1" -> "Goldstar_Model_0_1"
 export function buildConnToHwMap(phys) {
     const counts = {};
     return Object.fromEntries(phys.map(p => {
@@ -109,7 +127,6 @@ export function buildConnToHwMap(phys) {
     }));
 }
 
-// inverse of buildConnToHwMap: hardware signature -> connector
 export function buildHwToConnMap(phys) {
     return Object.fromEntries(
         Object.entries(buildConnToHwMap(phys)).map(([conn, hwSig]) => [hwSig, conn])
@@ -123,7 +140,6 @@ function getActiveMode(modes) {
     return preferred ? preferred[0] : (modes.length ? modes[0][0] : "");
 }
 
-// hw_sig of the primary monitor, on both the live desktop and the saved profile
 function resolvePrimaryHwSigs(logical, profile, connToHw) {
     const livePrimary = logical.find(lm => lm[4] && lm[5].length > 0);
     const profilePrimary = profile.logical_monitors.find(slm => slm.primary && slm.monitors.length > 0);
@@ -133,7 +149,6 @@ function resolvePrimaryHwSigs(logical, profile, connToHw) {
     };
 }
 
-// normalizes coordinates and the primary flag, then applies via D-Bus
 async function applyLayoutToDBus(serial, logicalMonitors, livePrimaryHwSig, profilePrimaryHwSig) {
     if (!logicalMonitors || logicalMonitors.length === 0) throw new Error("No logical monitors to apply.");
 
@@ -153,8 +168,6 @@ async function applyLayoutToDBus(serial, logicalMonitors, livePrimaryHwSig, prof
         lm[1] -= minY;
     });
 
-    // Mutter's ApplyMonitorsConfig rejects the trailing properties dict that
-    // GetCurrentState returns, so it's stripped down to 6 fields per monitor here
     const finalLm = lmList.map(lm => [
         Number(lm[0]), Number(lm[1]), Number(lm[2]), Number(lm[3]), lm[4],
         lm[5].map(m => [m[0], m[1], m[2] || {}])
@@ -164,7 +177,105 @@ async function applyLayoutToDBus(serial, logicalMonitors, livePrimaryHwSig, prof
     await callMutterAsync("ApplyMonitorsConfig", variant);
 }
 
-export async function saveLayout(name, aliasResolver) {
+export async function getProfilesForHardwareAsync(phys) {
+    const connectedHwSet = new Set(Object.values(buildConnToHwMap(phys)));
+    const profiles = await getProfilesAsync();
+    const matching = [];
+
+    for (const name of profiles) {
+        const content = await readTextFileAsync(`${CONFIG_DIR}/${name}.json`);
+        if (!content) continue;
+        try {
+            const data = JSON.parse(content);
+            const profHws = data.logical_monitors.flatMap(lm => lm.monitors.map(m => m.hw_sig));
+            if (profHws.every(hw => connectedHwSet.has(hw))) {
+                matching.push({ name, isDefault: !!data.is_default });
+            }
+        } catch (e) {}
+    }
+    return matching;
+}
+
+export async function setDefaultSubprofile(targetName) {
+    const targetContent = await readTextFileAsync(`${CONFIG_DIR}/${targetName}.json`);
+    if (!targetContent) throw new Error(`Profile '${targetName}' does not exist.`);
+
+    let targetProfile;
+    try {
+        targetProfile = JSON.parse(targetContent);
+    } catch (e) {
+        throw new Error(`Profile '${targetName}' is invalid.`);
+    }
+
+    const targetHws = new Set(targetProfile.logical_monitors.flatMap(lm => lm.monitors.map(m => m.hw_sig)));
+    const targetGroup = parseProfileName(targetName).group;
+    const profiles = await getProfilesAsync();
+
+    for (const name of profiles) {
+        const content = await readTextFileAsync(`${CONFIG_DIR}/${name}.json`);
+        if (!content) continue;
+        try {
+            const data = JSON.parse(content);
+            const profHws = data.logical_monitors.flatMap(lm => lm.monitors.map(m => m.hw_sig));
+            const sameGroup = parseProfileName(name).group === targetGroup;
+            const overlapsHw = profHws.some(hw => targetHws.has(hw));
+
+            if (sameGroup || overlapsHw) {
+                const shouldBeDefault = (name === targetName);
+                if (data.is_default !== shouldBeDefault) {
+                    data.is_default = shouldBeDefault;
+                    await writeTextFileAsync(`${CONFIG_DIR}/${name}.json`, JSON.stringify(data, null, 2));
+                }
+            }
+        } catch (e) {}
+    }
+}
+
+export async function recordHardwareHistory(phys, profileName) {
+    const hwSetString = getConnectedHwSetString(phys);
+    let history = {};
+    const content = await readTextFileAsync(HARDWARE_HISTORY_FILE);
+    if (content) {
+        try { history = JSON.parse(content); } catch (e) {}
+    }
+    history[hwSetString] = profileName;
+    await writeTextFileAsync(HARDWARE_HISTORY_FILE, JSON.stringify(history, null, 2));
+}
+
+export async function resolveAutoApplyProfileAsync(phys) {
+    const matching = await getProfilesForHardwareAsync(phys);
+    if (matching.length === 0) return null;
+
+    const defaultProf = matching.find(m => m.isDefault);
+    if (defaultProf) return defaultProf.name;
+
+    const hwSetString = getConnectedHwSetString(phys);
+    const historyJson = await readTextFileAsync(HARDWARE_HISTORY_FILE);
+    if (historyJson) {
+        try {
+            const history = JSON.parse(historyJson);
+            if (history[hwSetString] && matching.some(m => m.name === history[hwSetString])) {
+                return history[hwSetString];
+            }
+        } catch (e) {}
+    }
+
+    return matching[0].name;
+}
+
+export async function cycleSubprofileAsync() {
+    const [, phys] = await getCurrentDisplayStateAsync();
+    const matching = await getProfilesForHardwareAsync(phys);
+    if (matching.length <= 1) return null;
+
+    const current = (await readTextFileAsync(ACTIVE_PROFILE_FILE))?.trim();
+    const idx = matching.findIndex(m => m.name === current);
+    const nextProf = matching[(idx + 1) % matching.length].name;
+    await applyLayout(nextProf);
+    return nextProf;
+}
+
+export async function saveLayout(name, aliasResolver, isDefault = false) {
     const [, phys, logical] = await getCurrentDisplayStateAsync();
     const connToHw = buildConnToHwMap(phys);
     const activeModes = Object.fromEntries(phys.map(p => [connToHw[p[0][0]], getActiveMode(p[1])]));
@@ -183,9 +294,14 @@ export async function saveLayout(name, aliasResolver) {
         savedLogical.push({ x, y, scale, transform, primary, monitors: savedPhys });
     }
 
-    const profile = { name, labels, logical_monitors: savedLogical };
+    const profile = { name, is_default: isDefault, labels, logical_monitors: savedLogical };
     await writeTextFileAsync(`${CONFIG_DIR}/${name}.json`, JSON.stringify(profile, null, 2));
     await writeTextFileAsync(ACTIVE_PROFILE_FILE, name);
+    await recordHardwareHistory(phys, name);
+
+    if (isDefault) {
+        await setDefaultSubprofile(name);
+    }
 }
 
 export async function applyLayout(name) {
@@ -217,6 +333,7 @@ export async function applyLayout(name) {
 
     await applyLayoutToDBus(serial, newLogical, livePrimaryHwSig, profilePrimaryHwSig);
     await writeTextFileAsync(ACTIVE_PROFILE_FILE, name);
+    await recordHardwareHistory(phys, name);
 }
 
 export async function toggleLayouts(aliases) {

@@ -3,105 +3,125 @@
   <schema id="org.gnome.shell.extensions.display-layouts" path="/org/gnome/shell/extensions/display-layouts/">
     <key name="show-indicator" type="b">
       <default>true</default>
-      <summary>Show the top panel indicator icon</summary>
+      <summary>Show Top Bar Icon</summary>
+      <description>Toggle the visibility of the display layouts menu indicator</description>
     </key>
-
     <key name="show-notifications" type="b">
       <default>true</default>
-      <summary>Show system notifications for profile and layout events</summary>
+      <summary>Show Notifications</summary>
+      <description>Show system notifications for profile and layout events</description>
     </key>
 
-    <key name="enable-auto-apply" type="b">
-      <default>true</default>
-      <summary>Instantly apply saved profiles matching connected displays</summary>
-    </key>
-
-    <!-- Generic Slot 1 -->
+    <!-- Hotkey Slot 1 -->
     <key name="shortcut-1" type="as">
       <default>[]</default>
+      <summary>Shortcut keybinding 1</summary>
     </key>
     <key name="target-1" type="s">
       <default>""</default>
+      <summary>Target 1</summary>
     </key>
     <key name="action-1" type="s">
-      <default>"apply"</default> <!-- "apply", "toggle", or "save" -->
+      <default>"apply"</default>
+      <summary>Action 1</summary>
     </key>
 
-    <!-- Generic Slot 2 -->
+    <!-- Hotkey Slot 2 -->
     <key name="shortcut-2" type="as">
       <default>[]</default>
+      <summary>Shortcut keybinding 2</summary>
     </key>
     <key name="target-2" type="s">
       <default>""</default>
+      <summary>Target 2</summary>
     </key>
     <key name="action-2" type="s">
       <default>"apply"</default>
+      <summary>Action 2</summary>
     </key>
 
-    <!-- Generic Slot 3 -->
+    <!-- Hotkey Slot 3 -->
     <key name="shortcut-3" type="as">
       <default>[]</default>
+      <summary>Shortcut keybinding 3</summary>
     </key>
     <key name="target-3" type="s">
       <default>""</default>
+      <summary>Target 3</summary>
     </key>
     <key name="action-3" type="s">
-      <default>"toggle"</default>
+      <default>"apply"</default>
+      <summary>Action 3</summary>
     </key>
 
-    <!-- Generic Slot 4 -->
+    <!-- Hotkey Slot 4 -->
     <key name="shortcut-4" type="as">
       <default>[]</default>
+      <summary>Shortcut keybinding 4</summary>
     </key>
     <key name="target-4" type="s">
       <default>""</default>
+      <summary>Target 4</summary>
     </key>
     <key name="action-4" type="s">
-      <default>"toggle"</default>
+      <default>"apply"</default>
+      <summary>Action 4</summary>
     </key>
 
-    <!-- Generic Slot 5 -->
+    <!-- Hotkey Slot 5 -->
     <key name="shortcut-5" type="as">
       <default>[]</default>
+      <summary>Shortcut keybinding 5</summary>
     </key>
     <key name="target-5" type="s">
       <default>""</default>
+      <summary>Target 5</summary>
     </key>
     <key name="action-5" type="s">
-      <default>"toggle"</default>
+      <default>"apply"</default>
+      <summary>Action 5</summary>
     </key>
 
-    <!-- Generic Slot 6 -->
+    <!-- Hotkey Slot 6 -->
     <key name="shortcut-6" type="as">
       <default>[]</default>
+      <summary>Shortcut keybinding 6</summary>
     </key>
     <key name="target-6" type="s">
       <default>""</default>
+      <summary>Target 6</summary>
     </key>
     <key name="action-6" type="s">
-      <default>"toggle"</default>
+      <default>"apply"</default>
+      <summary>Action 6</summary>
     </key>
 
-    <!-- Generic Slot 7 -->
+    <!-- Hotkey Slot 7 -->
     <key name="shortcut-7" type="as">
       <default>[]</default>
+      <summary>Shortcut keybinding 7</summary>
     </key>
     <key name="target-7" type="s">
       <default>""</default>
+      <summary>Target 7</summary>
     </key>
     <key name="action-7" type="s">
-      <default>"toggle"</default>
+      <default>"apply"</default>
+      <summary>Action 7</summary>
     </key>
 
-    <!-- Generic Slot 8 -->
+    <!-- Hotkey Slot 8 -->
     <key name="shortcut-8" type="as">
       <default>[]</default>
+      <summary>Shortcut keybinding 8</summary>
     </key>
     <key name="target-8" type="s">
       <default>""</default>
+      <summary>Target 8</summary>
     </key>
     <key name="action-8" type="s">
-      <default>"save"</default>
+      <default>"apply"</default>
+      <summary>Action 8</summary>
     </key>
   </schema>
 </schemalist>

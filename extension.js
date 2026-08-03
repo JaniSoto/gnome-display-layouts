@@ -1,3 +1,4 @@
+// extension.js
 import Gio from 'gi://Gio';
 import GObject from 'gi://GObject';
 import St from 'gi://St';
@@ -18,10 +19,10 @@ const DBUS_XML = `
     <method name="Apply"><arg type="s" name="name" direction="in"/></method>
     <method name="Toggle"><arg type="as" name="aliases" direction="in"/><arg type="as" name="toggles" direction="out"/></method>
     <method name="Save"><arg type="s" name="name" direction="in"/></method>
+    <method name="Cycle"><arg type="s" name="nextProfile" direction="out"/></method>
   </interface>
 </node>`;
 
-// shared GSettings instance, set in enable() / cleared in disable()
 let _settings = null;
 
 function _logError(error, context) {
@@ -34,7 +35,6 @@ function _notify(message, isError = false) {
     }
 }
 
-// wraps a LayoutEngine call so failures surface as a plain Error over D-Bus
 async function _callSafe(fn) {
     try {
         return await fn();
@@ -67,6 +67,10 @@ class DisplayLayoutsDBusService {
     async Save(name) {
         return _callSafe(() => LayoutEngine.saveLayout(name, async (conn, v, p, x, y, def) => conn || def));
     }
+
+    async Cycle() {
+        return _callSafe(() => LayoutEngine.cycleSubprofileAsync());
+    }
 }
 
 const LayoutIndicator = GObject.registerClass({
@@ -93,7 +97,6 @@ const LayoutIndicator = GObject.registerClass({
         await this.updateCacheAndRebuild(false);
     }
 
-    // true once this rebuild epoch is superseded or the indicator was destroyed
     _isStale(epoch) {
         return this._destroyed || epoch !== this._rebuildEpoch;
     }
@@ -122,10 +125,15 @@ const LayoutIndicator = GObject.registerClass({
             if (this._isStale(epoch)) return;
             const profiles = await LayoutEngine.getProfilesAsync();
             if (this._isStale(epoch)) return;
+
+            const [, phys] = this._displayStateCache;
+            const matchingProfiles = await LayoutEngine.getProfilesForHardwareAsync(phys);
+            if (this._isStale(epoch)) return;
+
             const activeJsonStr = activeProfile ? await LayoutEngine.readTextFileAsync(`${LayoutEngine.CONFIG_DIR}/${activeProfile}.json`) : null;
 
             if (this._isStale(epoch)) return;
-            this._rebuildMenuFromData(activeProfile, profiles, activeJsonStr);
+            this._rebuildMenuFromData(activeProfile, profiles, matchingProfiles, activeJsonStr);
         } catch (e) { _logError(e, 'Rebuild background sequence failed'); }
     }
 
@@ -135,19 +143,36 @@ const LayoutIndicator = GObject.registerClass({
         this.menu.addMenuItem(item);
     }
 
-    _rebuildMenuFromData(activeProfile, profiles, activeJsonStr) {
+    _groupProfiles(profileItems) {
+        const groups = new Map();
+        profileItems.forEach(item => {
+            const nameStr = typeof item === 'string' ? item : item.name;
+            const parsed = LayoutEngine.parseProfileName(nameStr);
+            if (!groups.has(parsed.group)) groups.set(parsed.group, []);
+            groups.get(parsed.group).push({ ...parsed, raw: item });
+        });
+        return groups;
+    }
+
+    _rebuildMenuFromData(activeProfile, profiles, matchingProfiles, activeJsonStr) {
         if (this._destroyed) return;
         this.menu.removeAll();
 
-        this._addSectionHeader('Saved Profiles');
+        const matchingSet = new Set(matchingProfiles.map(m => m.name));
 
-        if (profiles.length === 0) {
-            const emptyItem = new PopupMenu.PopupMenuItem('No profiles found');
-            emptyItem.sensitive = false;
-            this.menu.addMenuItem(emptyItem);
-        } else {
-            profiles.forEach(profile => {
-                const item = new PopupMenu.PopupMenuItem(profile);
+        this._addSectionHeader('Profiles');
+
+        const allGroups = this._groupProfiles(profiles);
+
+        allGroups.forEach((items, groupName) => {
+            const isMatchingGroup = items.some(i => matchingSet.has(i.fullName));
+            const isSingleUngrouped = items.length === 1 && !items[0].isGrouped;
+
+            if (isSingleUngrouped) {
+                const profile = items[0].fullName;
+                const matchingObj = matchingProfiles.find(m => m.name === profile);
+                const labelText = matchingObj?.isDefault ? `${profile} (Default)` : profile;
+                const item = new PopupMenu.PopupMenuItem(labelText);
                 if (profile === activeProfile) item.setOrnament(PopupMenu.Ornament.CHECK);
 
                 item.connect('activate', async () => {
@@ -158,8 +183,29 @@ const LayoutIndicator = GObject.registerClass({
                     } catch (err) { _notify(`Error: ${err.message}`, true); }
                 });
                 this.menu.addMenuItem(item);
-            });
-        }
+            } else {
+                const subMenuTitle = isMatchingGroup ? `${groupName} (Connected)` : groupName;
+                const subMenu = new PopupMenu.PopupSubMenuMenuItem(subMenuTitle);
+
+                items.forEach(itemData => {
+                    const profile = itemData.fullName;
+                    const matchingObj = matchingProfiles.find(m => m.name === profile);
+                    const labelText = matchingObj?.isDefault ? `${itemData.sub} (Default)` : itemData.sub;
+                    const subItem = new PopupMenu.PopupMenuItem(labelText);
+                    if (profile === activeProfile) subItem.setOrnament(PopupMenu.Ornament.CHECK);
+
+                    subItem.connect('activate', async () => {
+                        try {
+                            await LayoutEngine.applyLayout(profile);
+                            if (this._destroyed) return;
+                            _notify(`Applied layout: ${profile}`);
+                        } catch (err) { _notify(`Error: ${err.message}`, true); }
+                    });
+                    subMenu.menu.addMenuItem(subItem);
+                });
+                this.menu.addMenuItem(subMenu);
+            }
+        });
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
@@ -199,35 +245,54 @@ const LayoutIndicator = GObject.registerClass({
         this.menu.addMenuItem(saveItem);
     }
 
-    triggerSaveDialog() {
+    async triggerSaveDialog() {
         if (this._destroyed) return;
         if (!this._displayStateCache) return _notify('Error: No active display state cached.', true);
 
-        // close a stale dialog before opening a new one
         if (this._saveDialog) {
             this._saveDialog.close();
         }
 
-        const [, , logicalMonitors] = this._displayStateCache;
+        const [, phys, logicalMonitors] = this._displayStateCache;
         const monitorsToLabel = logicalMonitors.flatMap((lm, idx) =>
             lm[5].map(p => ({ connector: p[0], manufacturer: p[1], modelName: p[2], x: lm[0], y: lm[1], defaultAlias: String(idx + 1) }))
         );
 
-        this._saveDialog = new SaveLayoutDialog(monitorsToLabel, async (name, aliasMap) => {
-            try {
-                await LayoutEngine.saveLayout(name, async (conn, v, p, x, y, def) => aliasMap[conn] || def);
-                if (this._destroyed) return;
-                _notify(`Saved layout '${name}'.`);
-                await this.updateCacheAndRebuild(true);
-            } catch (err) { _notify(`Failed to save: ${err.message}`, true); }
-        });
+        try {
+            const profiles = await LayoutEngine.getProfilesAsync();
+            if (this._destroyed) return;
 
-        // avoid a dangling reference once the dialog closes
-        this._saveDialog.connect('destroy', () => {
-            this._saveDialog = null;
-        });
+            const existingGroups = Array.from(new Set(profiles.map(p => LayoutEngine.parseProfileName(p).group)));
+            const matchingProfiles = await LayoutEngine.getProfilesForHardwareAsync(phys);
+            if (this._destroyed) return;
 
-        this._saveDialog.open();
+            let suggestedGroup = '';
+            if (matchingProfiles.length > 0) {
+                suggestedGroup = LayoutEngine.parseProfileName(matchingProfiles[0].name).group;
+            } else if (existingGroups.length > 0) {
+                suggestedGroup = existingGroups[0];
+            }
+
+            this._saveDialog = new SaveLayoutDialog(
+                monitorsToLabel, existingGroups, suggestedGroup,
+                async (name, aliasMap, isDefault) => {
+                    try {
+                        await LayoutEngine.saveLayout(name, async (conn, v, p, x, y, def) => aliasMap[conn] || def, isDefault);
+                        if (this._destroyed) return;
+                        _notify(`Saved layout '${name}'.`);
+                        await this.updateCacheAndRebuild(true);
+                    } catch (err) { _notify(`Failed to save: ${err.message}`, true); }
+                }
+            );
+
+            this._saveDialog.connect('destroy', () => {
+                this._saveDialog = null;
+            });
+
+            this._saveDialog.open();
+        } catch (err) {
+            _logError(err, 'Failed to prepare save dialog');
+        }
     }
 
     destroy() {
@@ -245,10 +310,7 @@ export default class DisplayLayoutsExtension extends Extension {
     enable() {
         _settings = this.getSettings('org.gnome.shell.extensions.display-layouts');
         this._indicator = null;
-        this._cacheInitialized = false;
         this._lastConnectedHwSigs = null;
-
-        this._initAutoApplyCache();
 
         this._dbusService = new DisplayLayoutsDBusService();
 
@@ -270,21 +332,26 @@ export default class DisplayLayoutsExtension extends Extension {
                         _notify(`Toggled: ${toggles.join(', ')}`);
                     } else if (action === 'save' && this._indicator) {
                         this._indicator.triggerSaveDialog();
+                    } else if (action === 'cycle') {
+                        const nextProf = await LayoutEngine.cycleSubprofileAsync();
+                        if (nextProf) _notify(`Cycled to layout: ${nextProf}`);
                     }
                 } catch (e) { _notify(`Error: ${e.message}`, true); }
             });
+        });
+
+        this._handleAutoApply().then(() => {
+            if (this._indicator) {
+                this._indicator.updateCacheAndRebuild(false).catch(e => _logError(e, 'Initial indicator build failed'));
+            }
         });
 
         this._signalId = Gio.DBus.session.signal_subscribe(
             'org.gnome.Mutter.DisplayConfig', 'org.gnome.Mutter.DisplayConfig', 'MonitorsChanged',
             '/org/gnome/Mutter/DisplayConfig', null, Gio.DBusSignalFlags.NONE,
             async () => {
-                if (!this._cacheInitialized) return;
-
-                // try to auto-apply a matching profile first
                 const applied = await this._handleAutoApply();
 
-                // otherwise just refresh the menu with the new state
                 if (!applied && this._indicator) {
                     try {
                         await this._indicator.updateCacheAndRebuild(false);
@@ -297,55 +364,26 @@ export default class DisplayLayoutsExtension extends Extension {
         this._updateIndicatorVisibility();
     }
 
-    async _initAutoApplyCache() {
-        try {
-            const [, phys] = await LayoutEngine.getCurrentDisplayStateAsync();
-            this._lastConnectedHwSigs = LayoutEngine.getConnectedHwSetString(phys);
-            this._cacheInitialized = true;
-        } catch (e) {
-            _logError(e, 'Failed to initialize hardware signature cache');
-        }
-    }
-
     async _handleAutoApply() {
         try {
             const [, phys] = await LayoutEngine.getCurrentDisplayStateAsync();
             const currentHwSet = LayoutEngine.getConnectedHwSetString(phys);
 
-            // avoid re-triggering on the same hardware set
             if (currentHwSet === this._lastConnectedHwSigs) return false;
-            this._lastConnectedHwSigs = currentHwSet;
 
-            // user disabled auto-apply
-            if (!_settings || !_settings.get_boolean('enable-auto-apply')) return false;
-
-            // cancel this run if a newer one starts before it finishes
             this._latestAutoApplyId = (this._latestAutoApplyId || 0) + 1;
             const runId = this._latestAutoApplyId;
 
-            const profiles = await LayoutEngine.getProfilesAsync();
-            if (runId !== this._latestAutoApplyId) return false;
-
-            for (const name of profiles) {
-                const content = await LayoutEngine.readTextFileAsync(`${LayoutEngine.CONFIG_DIR}/${name}.json`);
-                if (runId !== this._latestAutoApplyId) return false;
-                if (!content) continue;
-
-                let profile;
-                try {
-                    profile = JSON.parse(content);
-                } catch (err) {
-                    continue; // skip corrupted profile
-                }
-
-                const profileHwSet = profile.logical_monitors.flatMap(lm => lm.monitors.map(m => m.hw_sig)).sort().join(',');
-
-                if (profileHwSet === currentHwSet) {
-                    await LayoutEngine.applyLayout(name);
-                    _notify(`Auto-applied profile: ${name}`);
-                    return true;
-                }
+            const targetProfile = await LayoutEngine.resolveAutoApplyProfileAsync(phys);
+            if (runId !== this._latestAutoApplyId || !targetProfile) {
+                this._lastConnectedHwSigs = currentHwSet;
+                return false;
             }
+
+            await LayoutEngine.applyLayout(targetProfile);
+            this._lastConnectedHwSigs = currentHwSet;
+            _notify(`Auto-applied layout: ${targetProfile}`);
+            return true;
         } catch (e) {
             _logError(e, 'Auto-apply sequence failed');
         }
@@ -365,7 +403,7 @@ export default class DisplayLayoutsExtension extends Extension {
 
     disable() {
         if (this._bindings) { this._bindings.forEach(b => Main.wm.removeKeybinding(b.shortcutKey)); this._bindings = null; }
-        if (this._signalId) { Gio.DBus.session.signal_unsubscribe(this._signalId); this._signalId = null; }
+        if (this._signalId) { Gio.DBus.signal_unsubscribe(this._signalId); this._signalId = null; }
         _settings?.disconnectObject(this);
         if (this._indicator) { this._indicator.destroy(); this._indicator = null; }
         if (this._dbusService) { this._dbusService.destroy(); this._dbusService = null; }

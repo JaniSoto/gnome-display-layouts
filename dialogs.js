@@ -1,18 +1,22 @@
+// dialogs.js
 import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
 import St from 'gi://St';
+import { CheckBox } from 'resource:///org/gnome/shell/ui/checkBox.js';
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 export const SaveLayoutDialog = GObject.registerClass({
     GTypeName: 'DisplayLayoutsSaveDialog',
 }, class SaveLayoutDialog extends ModalDialog.ModalDialog {
-    _init(monitors, callback) {
+    _init(monitors, existingGroups, suggestedGroup, callback) {
         super._init({
             styleClass: 'save-layout-dialog',
             destroyOnClose: true,
         });
         this._callback = callback;
+        this._existingGroups = existingGroups || [];
+        const initialGroup = suggestedGroup || (this._existingGroups[0] || '');
 
         const titleLabel = new St.Label({
             text: 'Save Display Layout',
@@ -20,22 +24,81 @@ export const SaveLayoutDialog = GObject.registerClass({
         });
         this.contentLayout.add_child(titleLabel);
 
-        const nameLabel = new St.Label({
-            text: 'Profile Name:',
+        if (this._existingGroups.length > 0) {
+            const chipsHeader = new St.Label({
+                text: 'Select Group:',
+                style: 'font-weight: bold; margin-bottom: 5px;',
+            });
+            this.contentLayout.add_child(chipsHeader);
+
+            const groupChipsRow = new St.BoxLayout({
+                vertical: false,
+                style: 'margin-bottom: 10px; spacing: 5px; flex-wrap: wrap;',
+            });
+
+            this._existingGroups.forEach(grp => {
+                const btn = new St.Button({
+                    label: grp,
+                    style_class: 'button',
+                    can_focus: true,
+                    style: 'padding: 4px 10px;',
+                });
+                btn.connect('clicked', () => {
+                    this._groupEntry.set_text(grp);
+                    this._subprofileEntry.grab_key_focus();
+                });
+                groupChipsRow.add_child(btn);
+            });
+
+            const newGrpBtn = new St.Button({
+                label: '+ New Group',
+                style_class: 'button',
+                can_focus: true,
+                style: 'padding: 4px 10px;',
+            });
+            newGrpBtn.connect('clicked', () => {
+                this._groupEntry.set_text('');
+                this._groupEntry.grab_key_focus();
+            });
+            groupChipsRow.add_child(newGrpBtn);
+
+            this.contentLayout.add_child(groupChipsRow);
+        }
+
+        const groupLabel = new St.Label({
+            text: 'Group Name:',
             style: 'font-weight: bold; margin-bottom: 5px;',
         });
-        this.contentLayout.add_child(nameLabel);
+        this.contentLayout.add_child(groupLabel);
 
-        this._nameEntry = new St.Entry({
+        this._groupEntry = new St.Entry({
             can_focus: true,
-            hint_text: 'e.g. home, work, docking',
-            style: 'margin-bottom: 20px; width: 335px;',
+            text: initialGroup,
+            hint_text: 'e.g. Home, Work',
+            style: 'margin-bottom: 10px; width: 335px;',
         });
-        // Enter submits, same as clicking "Save Profile"
-        this._nameEntry.clutter_text.connect('activate', () => this._saveAction());
-        this.contentLayout.add_child(this._nameEntry);
+        this._groupEntry.clutter_text.connect('activate', () => this._subprofileEntry.grab_key_focus());
+        this.contentLayout.add_child(this._groupEntry);
 
-        this.setInitialKeyFocus(this._nameEntry);
+        const subLabel = new St.Label({
+            text: 'Subprofile Name:',
+            style: 'font-weight: bold; margin-bottom: 5px;',
+        });
+        this.contentLayout.add_child(subLabel);
+
+        this._subprofileEntry = new St.Entry({
+            can_focus: true,
+            hint_text: 'e.g. full, dual, gaming',
+            style: 'margin-bottom: 15px; width: 335px;',
+        });
+        this._subprofileEntry.clutter_text.connect('activate', () => this._saveAction());
+        this.contentLayout.add_child(this._subprofileEntry);
+
+        this._defaultCheck = new CheckBox('Set as default subprofile for this hardware');
+        this._defaultCheck.style = 'margin-bottom: 15px;';
+        this.contentLayout.add_child(this._defaultCheck);
+
+        this.setInitialKeyFocus(initialGroup ? this._subprofileEntry : this._groupEntry);
 
         const aliasesHeader = new St.Label({
             text: 'Assign Display Aliases (e.g. left, tv):',
@@ -45,7 +108,6 @@ export const SaveLayoutDialog = GObject.registerClass({
 
         this._monitorEntries = [];
 
-        // one row per connected monitor
         monitors.forEach(m => {
             const row = new St.BoxLayout({
                 vertical: false,
@@ -62,10 +124,9 @@ export const SaveLayoutDialog = GObject.registerClass({
             const entry = new St.Entry({
                 can_focus: true,
                 hint_text: m.defaultAlias,
-                text: m.connector, // pre-fill with the port as a logical default
+                text: m.connector,
                 style: 'width: 120px;',
             });
-            // Enter submits from any alias field too
             entry.clutter_text.connect('activate', () => this._saveAction());
             row.add_child(entry);
 
@@ -74,7 +135,7 @@ export const SaveLayoutDialog = GObject.registerClass({
             this._monitorEntries.push({
                 connector: m.connector,
                 entry,
-                defaultAlias: m.defaultAlias
+                defaultAlias: m.defaultAlias,
             });
         });
 
@@ -92,10 +153,19 @@ export const SaveLayoutDialog = GObject.registerClass({
     }
 
     _saveAction() {
-        const name = this._nameEntry.get_text().trim();
-        if (!name) {
-            Main.notify('Display Layouts', 'Error: Profile name is required.');
+        const group = this._groupEntry.get_text().trim();
+        const sub = this._subprofileEntry.get_text().trim();
+
+        if (!group && !sub) {
+            Main.notify('Display Layouts', 'Error: Group or profile name is required.');
             return;
+        }
+
+        let fullName = '';
+        if (group && sub) {
+            fullName = `${group}:${sub}`;
+        } else {
+            fullName = group || sub;
         }
 
         const aliasMap = {};
@@ -104,7 +174,8 @@ export const SaveLayoutDialog = GObject.registerClass({
             aliasMap[item.connector] = enteredAlias || item.defaultAlias;
         });
 
-        this._callback(name, aliasMap);
+        const isDefault = this._defaultCheck.checked;
+        this._callback(fullName, aliasMap, isDefault);
         this.close();
     }
 });
