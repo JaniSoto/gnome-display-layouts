@@ -1,4 +1,3 @@
-// extension.js
 import Gio from 'gi://Gio';
 import GObject from 'gi://GObject';
 import St from 'gi://St';
@@ -403,7 +402,7 @@ export default class DisplayLayoutsExtension extends Extension {
 
     disable() {
         if (this._bindings) { this._bindings.forEach(b => Main.wm.removeKeybinding(b.shortcutKey)); this._bindings = null; }
-        if (this._signalId) { Gio.DBus.signal_unsubscribe(this._signalId); this._signalId = null; }
+        if (this._signalId) { Gio.DBus.session.signal_unsubscribe(this._signalId); this._signalId = null; }
         _settings?.disconnectObject(this);
         if (this._indicator) { this._indicator.destroy(); this._indicator = null; }
         if (this._dbusService) { this._dbusService.destroy(); this._dbusService = null; }
