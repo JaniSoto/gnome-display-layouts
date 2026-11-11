@@ -290,7 +290,7 @@ const LayoutIndicator = GObject.registerClass({
 
             this._saveDialog.open();
         } catch (err) {
-            _logError(err, 'Failed to prepare save dialog');
+            _logError(err, "Failed to prepare save dialog"); _notify(`Failed to open save dialog: ${err.message}`, true);
         }
     }
 

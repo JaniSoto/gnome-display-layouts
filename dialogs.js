@@ -1,4 +1,3 @@
-// dialogs.js
 import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
 import St from 'gi://St';
@@ -32,7 +31,6 @@ export const SaveLayoutDialog = GObject.registerClass({
             this.contentLayout.add_child(chipsHeader);
 
             const groupChipsRow = new St.BoxLayout({
-                vertical: false,
                 style: 'margin-bottom: 10px; spacing: 5px; flex-wrap: wrap;',
             });
 
@@ -110,7 +108,6 @@ export const SaveLayoutDialog = GObject.registerClass({
 
         monitors.forEach(m => {
             const row = new St.BoxLayout({
-                vertical: false,
                 style: 'margin-bottom: 10px; align-items: center;',
             });
 
