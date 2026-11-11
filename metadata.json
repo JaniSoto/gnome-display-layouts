@@ -11,5 +11,6 @@
     "50",
     "51"
   ],
-  "url": "https://github.com/yourusername/gnome-monitor-layouts"
+  "url": "https://github.com/yourusername/gnome-monitor-layouts",
+  "settings-schema": "org.gnome.shell.extensions.display-layouts"
 }

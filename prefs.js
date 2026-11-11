@@ -7,7 +7,7 @@ const ACTIONS = ['apply', 'toggle', 'save', 'cycle'];
 
 export default class DisplayLayoutsPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
-        const settings = this.getSettings('org.gnome.shell.extensions.display-layouts');
+        const settings = this.getSettings();
 
         const page = new Adw.PreferencesPage();
         window.add(page);
@@ -44,9 +44,18 @@ export default class DisplayLayoutsPreferences extends ExtensionPreferences {
 
             const rowGroup = new Adw.ExpanderRow({
                 title: `Shortcut Slot ${slotIndex}`,
-                subtitle: 'Configure a custom keybinding trigger',
+                subtitle: 'Disabled',
             });
             prefGroup.add(rowGroup);
+
+            const updateSubtitle = () => {
+                const accel = settings.get_strv(shortcutKey)[0] || '';
+                const action = settings.get_string(actionKey);
+                const target = settings.get_string(targetKey).trim();
+                const isTargetAction = action === 'apply' || action === 'toggle';
+                const targetPart = isTargetAction && target ? ` '${target}'` : '';
+                rowGroup.subtitle = accel ? `${accel} → ${action}${targetPart}` : 'Disabled';
+            };
 
             const currentAction = settings.get_string(actionKey);
 
@@ -70,11 +79,13 @@ export default class DisplayLayoutsPreferences extends ExtensionPreferences {
                 visible: isTargetVisible(currentAction),
             });
             settings.bind(targetKey, targetRow, 'text', Gio.SettingsBindFlags.DEFAULT);
+            targetRow.connect('notify::text', updateSubtitle);
 
             combo.connect('notify::selected', () => {
                 const actionStr = ACTIONS[combo.selected] || 'apply';
                 settings.set_string(actionKey, actionStr);
                 targetRow.visible = isTargetVisible(actionStr);
+                updateSubtitle();
             });
             rowGroup.add_row(combo);
             rowGroup.add_row(targetRow);
@@ -85,9 +96,20 @@ export default class DisplayLayoutsPreferences extends ExtensionPreferences {
             });
             shortcutRow.connect('changed', () => {
                 const text = shortcutRow.get_text().trim();
-                settings.set_strv(shortcutKey, text ? [text] : []);
+                if (!text) {
+                    settings.set_strv(shortcutKey, []);
+                    updateSubtitle();
+                    return;
+                }
+                const [ok, keyval] = Gtk.accelerator_parse(text);
+                if (ok && keyval > 0) {
+                    settings.set_strv(shortcutKey, [text]);
+                    updateSubtitle();
+                }
             });
             rowGroup.add_row(shortcutRow);
+
+            updateSubtitle();
         };
 
         for (let i = 1; i <= 8; i++) {

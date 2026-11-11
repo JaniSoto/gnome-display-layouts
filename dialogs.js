@@ -14,6 +14,7 @@ export const SaveLayoutDialog = GObject.registerClass({
             destroyOnClose: true,
         });
         this._callback = callback;
+        this._saving = false;
         this._existingGroups = existingGroups || [];
         const initialGroup = suggestedGroup || (this._existingGroups[0] || '');
 
@@ -31,7 +32,7 @@ export const SaveLayoutDialog = GObject.registerClass({
             this.contentLayout.add_child(chipsHeader);
 
             const groupChipsRow = new St.BoxLayout({
-                style: 'margin-bottom: 10px; spacing: 5px; flex-wrap: wrap;',
+                style: 'margin-bottom: 10px; spacing: 5px;',
             });
 
             this._existingGroups.forEach(grp => {
@@ -150,10 +151,14 @@ export const SaveLayoutDialog = GObject.registerClass({
     }
 
     _saveAction() {
+        if (this._saving) return;
+        this._saving = true;
+
         const group = this._groupEntry.get_text().trim();
         const sub = this._subprofileEntry.get_text().trim();
 
         if (!group && !sub) {
+            this._saving = false;
             Main.notify('Display Layouts', 'Error: Group or profile name is required.');
             return;
         }
@@ -171,7 +176,7 @@ export const SaveLayoutDialog = GObject.registerClass({
             aliasMap[item.connector] = enteredAlias || item.defaultAlias;
         });
 
-        const isDefault = this._defaultCheck.checked;
+        const isDefault = Boolean(this._defaultCheck.checked ?? this._defaultCheck.get_checked?.());
         this._callback(fullName, aliasMap, isDefault);
         this.close();
     }
