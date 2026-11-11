@@ -62,8 +62,8 @@ const LayoutIndicator = GObject.registerClass({
         super._init(0.0, 'Display Layouts');
         this._extension = extension;
         this._displayStateCache = null;
-        this._saveDialog = null;
         this._rebuildEpoch = 0;
+        this._deferredRebuildId = null;
 
         this._icon = new St.Icon({
             icon_name: 'video-display-symbolic',
@@ -99,6 +99,21 @@ const LayoutIndicator = GObject.registerClass({
 
     async _refreshAndRebuild(epoch) {
         if (this._isStale(epoch)) return;
+
+        // Defer rebuild if the popup menu is actively open to avoid UI flicker
+        if (this.menu.isOpen) {
+            if (!this._deferredRebuildId) {
+                this._deferredRebuildId = this.menu.connect('open-state-changed', (m, isOpen) => {
+                    if (!isOpen && this._deferredRebuildId) {
+                        this.menu.disconnect(this._deferredRebuildId);
+                        this._deferredRebuildId = null;
+                        this.updateCacheAndRebuild(false);
+                    }
+                });
+            }
+            return;
+        }
+
         try {
             const activeProfile = (await LayoutEngine.readTextFileAsync(LayoutEngine.ACTIVE_PROFILE_FILE))?.trim() || '';
             if (this._isStale(epoch)) return;
@@ -227,75 +242,14 @@ const LayoutIndicator = GObject.registerClass({
         }
 
         const saveItem = new PopupMenu.PopupMenuItem('Save Current Layout...');
-        saveItem.connect('activate', () => this.triggerSaveDialog());
+        saveItem.connect('activate', () => this._extension.triggerSaveDialog());
         this.menu.addMenuItem(saveItem);
     }
 
-    async triggerSaveDialog() {
-        if (!this._displayStateCache) {
-            this._extension?._notify('Error: No active display state cached.', true);
-            return;
-        }
-
-        if (this._saveDialog) {
-            this._saveDialog.close();
-            this._saveDialog = null;
-        }
-
-        const [, phys, logicalMonitors] = this._displayStateCache;
-        const monitorsToLabel = logicalMonitors.flatMap((lm, idx) =>
-            lm[5].map(p => ({
-                connector: p[0],
-                manufacturer: p[1],
-                modelName: p[2],
-                x: lm[0],
-                y: lm[1],
-                defaultAlias: String(idx + 1),
-            }))
-        );
-
-        try {
-            const profiles = LayoutEngine.getProfiles();
-            const existingGroups = Array.from(new Set(
-                profiles.map(p => LayoutEngine.parseProfileName(p)).filter(p => p.isGrouped).map(p => p.group)
-            ));
-            const matchingProfiles = await LayoutEngine.getProfilesForHardwareAsync(phys);
-
-            let suggestedGroup = '';
-            if (matchingProfiles.length > 0) {
-                suggestedGroup = LayoutEngine.parseProfileName(matchingProfiles[0].name).group;
-            } else if (existingGroups.length > 0) {
-                suggestedGroup = existingGroups[0];
-            }
-
-            this._saveDialog = new SaveLayoutDialog(
-                monitorsToLabel, existingGroups, suggestedGroup,
-                async (name, aliasMap, isDefault) => {
-                    try {
-                        await LayoutEngine.saveLayout(name, async (conn, v, p, x, y, def) => aliasMap[conn] || def, isDefault);
-                        this._extension?._notify(`Saved layout '${name}'.`);
-                        await this.updateCacheAndRebuild(false);
-                    } catch (err) {
-                        this._extension?._notify(`Failed to save: ${err.message}`, true);
-                    }
-                }
-            );
-
-            this._saveDialog.connect('destroy', () => {
-                this._saveDialog = null;
-            });
-
-            this._saveDialog.open();
-        } catch (err) {
-            this._extension?._logError(err, 'Failed to prepare save dialog');
-            this._extension?._notify(`Failed to open save dialog: ${err.message}`, true);
-        }
-    }
-
     destroy() {
-        if (this._saveDialog) {
-            this._saveDialog.close();
-            this._saveDialog = null;
+        if (this._deferredRebuildId) {
+            this.menu.disconnect(this._deferredRebuildId);
+            this._deferredRebuildId = null;
         }
         this._extension = null;
         super.destroy();
@@ -317,9 +271,67 @@ export default class DisplayLayoutsExtension extends Extension {
         console.error(`[Display Layouts] ${context}: ${error.stack || error.message || error}`);
     }
 
-    enable() {
+    async triggerSaveDialog() {
+        if (this._saveDialog) {
+            this._saveDialog.close();
+            this._saveDialog = null;
+        }
+
+        try {
+            const state = await LayoutEngine.getCurrentDisplayStateAsync();
+            const [, phys, logicalMonitors] = state;
+            const monitorsToLabel = logicalMonitors.flatMap((lm, idx) =>
+                lm[5].map(p => ({
+                    connector: p[0],
+                    manufacturer: p[1],
+                    modelName: p[2],
+                    x: lm[0],
+                    y: lm[1],
+                    defaultAlias: String(idx + 1),
+                }))
+            );
+
+            const profiles = LayoutEngine.getProfiles();
+            const existingGroups = Array.from(new Set(
+                profiles.map(p => LayoutEngine.parseProfileName(p)).filter(p => p.isGrouped).map(p => p.group)
+            ));
+            const matchingProfiles = await LayoutEngine.getProfilesForHardwareAsync(phys);
+
+            let suggestedGroup = '';
+            if (matchingProfiles.length > 0) {
+                suggestedGroup = LayoutEngine.parseProfileName(matchingProfiles[0].name).group;
+            } else if (existingGroups.length > 0) {
+                suggestedGroup = existingGroups[0];
+            }
+
+            this._saveDialog = new SaveLayoutDialog(
+                monitorsToLabel, existingGroups, suggestedGroup,
+                async (name, aliasMap, isDefault) => {
+                    try {
+                        await LayoutEngine.saveLayout(name, async (conn, v, p, x, y, def) => aliasMap[conn] || def, isDefault);
+                        this._notify(`Saved layout '${name}'.`);
+                        if (this._indicator) await this._indicator.updateCacheAndRebuild(false);
+                    } catch (err) {
+                        this._notify(`Failed to save: ${err.message}`, true);
+                    }
+                }
+            );
+
+            this._saveDialog.connect('destroy', () => {
+                this._saveDialog = null;
+            });
+
+            this._saveDialog.open();
+        } catch (err) {
+            this._logError(err, 'Failed to prepare save dialog');
+            this._notify(`Failed to open save dialog: ${err.message}`, true);
+        }
+    }
+
+    async enable() {
         this._settings = this.getSettings();
         this._indicator = null;
+        this._saveDialog = null;
         this._lastConnectedHwSigs = null;
 
         this._dbusService = new DisplayLayoutsDBusService(this);
@@ -344,8 +356,8 @@ export default class DisplayLayoutsExtension extends Extension {
                         const toggles = await LayoutEngine.toggleLayouts([target]);
                         this._notify(`Toggled: ${toggles.join(', ')}`);
                         if (this._indicator) await this._indicator.updateCacheAndRebuild(false);
-                    } else if (action === 'save' && this._indicator) {
-                        this._indicator.triggerSaveDialog();
+                    } else if (action === 'save') {
+                        this.triggerSaveDialog();
                     } else if (action === 'cycle') {
                         const nextProf = await LayoutEngine.cycleSubprofileAsync();
                         if (nextProf) {
@@ -360,9 +372,10 @@ export default class DisplayLayoutsExtension extends Extension {
         });
 
         this._settings.connectObject('changed::show-indicator', () => this._updateIndicatorVisibility(), this);
-        this._updateIndicatorVisibility();
 
-        this._handleAutoApply();
+        // Auto-apply setup sequentially before attaching listeners
+        await this._handleAutoApply();
+        this._updateIndicatorVisibility();
 
         this._signalId = Gio.DBus.session.signal_subscribe(
             'org.gnome.Mutter.DisplayConfig', 'org.gnome.Mutter.DisplayConfig', 'MonitorsChanged',
@@ -423,6 +436,10 @@ export default class DisplayLayoutsExtension extends Extension {
             this._signalId = null;
         }
         this._settings?.disconnectObject(this);
+        if (this._saveDialog) {
+            this._saveDialog.close();
+            this._saveDialog = null;
+        }
         if (this._indicator) {
             this._indicator.destroy();
             this._indicator = null;

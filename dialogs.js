@@ -163,20 +163,21 @@ export const SaveLayoutDialog = GObject.registerClass({
             return;
         }
 
-        let fullName = '';
-        if (group && sub) {
-            fullName = `${group}:${sub}`;
-        } else {
-            fullName = group || sub;
+        let fullName = (group && sub) ? `${group}:${sub}` : (group || sub);
+        fullName = fullName.replace(/[^\w\s\-:]/g, '').replace(/:{2,}/g, ':').trim();
+        if (!fullName) {
+            this._saving = false;
+            Main.notify('Display Layouts', 'Error: Invalid characters in profile name.');
+            return;
         }
 
         const aliasMap = {};
         this._monitorEntries.forEach(item => {
-            const enteredAlias = item.entry.get_text().trim();
+            const enteredAlias = item.entry.get_text().trim().replace(/[^\w\s\-]/g, '');
             aliasMap[item.connector] = enteredAlias || item.defaultAlias;
         });
 
-        const isDefault = Boolean(this._defaultCheck.checked ?? this._defaultCheck.get_checked?.());
+        const isDefault = Boolean(this._defaultCheck.checked);
         this._callback(fullName, aliasMap, isDefault);
         this.close();
     }

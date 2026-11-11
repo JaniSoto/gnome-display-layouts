@@ -65,7 +65,7 @@ export default class DisplayLayoutsPreferences extends ExtensionPreferences {
                     'Apply Profile',
                     'Toggle Display',
                     'Save State (Prompt Dialog)',
-                    'Cycle Subprofiles (Active Setup)'
+                    'Cycle Subprofiles (Active Setup)',
                 ]),
             });
             const currentIndex = ACTIONS.indexOf(currentAction);
